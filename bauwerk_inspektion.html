@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#2563eb">
+    <title>Bauwerkinspektion</title>
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f3f4f6; color: #1f2937; }
+        .container { max-width: 600px; margin: 0 auto; padding: 16px; }
+        .hidden { display: none !important; }
+        .header { background: #2563eb; color: white; padding: 20px; text-align: center; margin: -16px -16px 20px; }
+        .header h1 { font-size: 1.25rem; font-weight: 600; }
+        .card { background: white; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .btn { width: 100%; padding: 16px; border: none; border-radius: 10px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: all 0.2s; margin-bottom: 10px; display: flex; align-items: center; justify-content: center; gap: 8px; }
+        .btn-primary { background: #2563eb; color: white; }
+        .btn-primary:active { background: #1d4ed8; transform: scale(0.98); }
+        .btn-secondary { background: #e5e7eb; color: #374151; }
+        .btn-success { background: #10b981; color: white; }
+        .btn-danger { background: #fee2e2; color: #991b1b; }
+        #qr-reader { width: 100% !important; border: none !important; }
+        .form-group { margin-bottom: 16px; }
+        .form-label { display: block; font-weight: 600; margin-bottom: 6px; color: #374151; font-size: 0.875rem; }
+        .form-input { width: 100%; padding: 12px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 1rem; font-family: inherit; }
+        .form-input:focus { outline: none; border-color: #2563eb; }
+        textarea.form-input { min-height: 120px; resize: vertical; }
+        .photo-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+        .photo-thumb { aspect-ratio: 1; border-radius: 8px; object-fit: cover; width: 100%; cursor: pointer; border: 2px solid transparent; }
+        .photo-thumb:hover { border-color: #ef4444; }
+        .bauwerk-badge { background: #dbeafe; color: #1e40af; padding: 8px 16px; border-radius: 20px; font-weight: 600; font-size: 0.875rem; display: inline-block; }
+        .recording { animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(100px); background: #1f2937; color: white; padding: 12px 24px; border-radius: 8px; font-size: 0.875rem; transition: transform 0.3s; z-index: 1000; }
+        .toast.show { transform: translateX(-50%) translateY(0); }
+        .top-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+        .photo-counter { font-size: 0.75rem; color: #6b7280; margin-top: 4px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header"><h1>🔧 Bauwerkinspektion</h1></div>
+
+        <!-- QR SCAN VIEW -->
+        <div id="view-scan">
+            <div class="card">
+                <p style="margin-bottom: 16px; color: #6b7280; text-align: center;">QR-Code am Bauwerk scannen oder manuell eingeben.</p>
+                <div id="qr-reader"></div>
+                <button class="btn btn-secondary" onclick="stopScan()" id="btn-stop-scan" style="display:none;">⏹️ Scanner stoppen</button>
+            </div>
+            <div class="card">
+                <div class="form-group">
+                    <label class="form-label">Oder Bezeichnung manuell eingeben</label>
+                    <input type="text" id="manual-bauwerk" class="form-input" placeholder="z.B. Brücke-A12-KM45" onkeydown="if(event.key==='Enter')startManual()">
+                </div>
+                <button class="btn btn-primary" onclick="startManual()">Inspektion starten</button>
+            </div>
+        </div>
+
+        <!-- INSPECTION VIEW -->
+        <div id="view-inspection" class="hidden">
+            <div class="card">
+                <div class="top-bar">
+                    <span class="bauwerk-badge" id="bauwerk-label">-</span>
+                    <button onclick="resetApp()" style="background: none; border: none; color: #ef4444; font-size: 0.875rem; cursor: pointer; font-weight: 600;">✕ Abbrechen</button>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">📸 Fotos <span id="photo-count" class="photo-counter">(0)</span></label>
+                    <input type="file" id="photo-input" accept="image/*" capture="environment" style="display: none;" onchange="handlePhotos(this)">
+                    <button class="btn btn-secondary" onclick="document.getElementById('photo-input').click()">📷 Foto aufnehmen</button>
+                    <div class="photo-grid" id="photo-grid"></div>
+                    <p style="font-size: 0.75rem; color: #9ca3af; margin-top: 6px;">Auf Foto tippen zum Entfernen</p>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">🎤 Mängel / Bemerkungen</label>
+                    <button class="btn btn-secondary" id="btn-speech" onclick="toggleSpeech()">🎙️ Spracheingabe starten</button>
+                    <textarea id="mangel-text" class="form-input" placeholder="Mängel hier eingeben oder per Sprache einfügen..."></textarea>
+                </div>
+                
+                <button class="btn btn-success" onclick="saveInspection()">💾 Speichern & ZIP herunterladen</button>
+            </div>
+        </div>
+
+        <!-- SUCCESS VIEW -->
+        <div id="view-success" class="hidden">
+            <div class="card" style="text-align: center;">
+                <div style="font-size: 4rem; margin-bottom: 16px;">✅</div>
+                <h2 style="margin-bottom: 8px;">Gespeichert!</h2>
+                <p style="color: #6b7280; margin-bottom: 20px;">ZIP wurde in deinen Downloads gespeichert.</p>
+                <button class="btn btn-primary" onclick="resetApp()">Nächste Inspektion</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        let currentBauwerk = '';
+        let photos = [];
+        let html5QrCode = null;
+        let recognition = null;
+        let isScanning = false;
+
+        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            recognition = new SpeechRecognition();
+            recognition.lang = 'de-DE';
+            recognition.continuous = true;
+            recognition.interimResults = true;
+            
+            recognition.onresult = (event) => {
+                let finalTranscript = '';
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    if (event.results[i].isFinal) {
+                        finalTranscript += event.results[i][0].transcript + ' ';
+                    }
+                }
+                if (finalTranscript) {
+                    const textarea = document.getElementById('mangel-text');
+                    textarea.value += (textarea.value ? ' ' : '') + finalTranscript;
+                }
+            };
+            
+            recognition.onerror = (e) => {
+                showToast('Sprachfehler: ' + e.error);
+                document.getElementById('btn-speech').classList.remove('recording');
+                document.getElementById('btn-speech').textContent = '🎙️ Spracheingabe starten';
+            };
+            
+            recognition.onend = () => {
+                document.getElementById('btn-speech').classList.remove('recording');
+                document.getElementById('btn-speech').textContent = '🎙️ Spracheingabe starten';
+            };
+        }
+
+        function startScan() {
+            if (isScanning) return;
+            
+            html5QrCode = new Html5Qrcode("qr-reader");
+            html5QrCode.start(
+                { facingMode: "environment" },
+                { fps: 10, qrbox: { width: 250, height: 250 } },
+                (decodedText) => {
+                    stopScan();
+                    openInspection(decodedText);
+                },
+                () => {}
+            ).then(() => {
+                isScanning = true;
+                document.getElementById('btn-stop-scan').style.display = 'flex';
+            }).catch((err) => {
+                showToast('Kamera-Zugriff fehlgeschlagen: ' + err);
+                html5QrCode = null;
+            });
+        }
+
+        function stopScan() {
+            if (!html5QrCode || !isScanning) {
+                isScanning = false;
+                document.getElementById('btn-stop-scan').style.display = 'none';
+                return;
+            }
+            
+            html5QrCode.stop().then(() => {
+                html5QrCode.clear();
+                html5QrCode = null;
+                isScanning = false;
+                document.getElementById('btn-stop-scan').style.display = 'none';
+            }).catch((err) => {
+                console.warn('Scanner stop error:', err);
+                html5QrCode = null;
+                isScanning = false;
+                document.getElementById('btn-stop-scan').style.display = 'none';
+            });
+        }
+
+        function startManual() {
+            const val = document.getElementById('manual-bauwerk').value.trim();
+            if (!val) { showToast('Bitte Bezeichnung eingeben'); return; }
+            stopScan();
+            openInspection(val);
+        }
+
+        function openInspection(bauwerk) {
+            currentBauwerk = bauwerk.replace(/[^a-zA-Z0-9-_]/g, '_');
+            document.getElementById('bauwerk-label').textContent = bauwerk;
+            document.getElementById('view-scan').classList.add('hidden');
+            document.getElementById('view-inspection').classList.remove('hidden');
+            photos = [];
+            updatePhotoGrid();
+        }
+
+        function handlePhotos(input) {
+            if (!input.files || input.files.length === 0) return;
+            
+            Array.from(input.files).forEach(file => {
+                if (!file.type.startsWith('image/')) return;
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    photos.push({
+                        name: file.name,
+                        data: e.target.result.split(',')[1],
+                        type: file.type
+                    });
+                    updatePhotoGrid();
+                };
+                reader.onerror = () => showToast('Fehler beim Lesen des Fotos');
+                reader.readAsDataURL(file);
+            });
+            input.value = '';
+        }
+
+        function updatePhotoGrid() {
+            const grid = document.getElementById('photo-grid');
+            const counter = document.getElementById('photo-count');
+            grid.innerHTML = '';
+            counter.textContent = '(' + photos.length + ')';
+            
+            photos.forEach((photo, idx) => {
+                const img = document.createElement('img');
+                img.src = 'data:' + photo.type + ';base64,' + photo.data;
+                img.className = 'photo-thumb';
+                img.alt = 'Foto ' + (idx + 1);
+                img.onclick = () => { 
+                    if (confirm('Foto ' + (idx + 1) + ' entfernen?')) {
+                        photos.splice(idx, 1); 
+                        updatePhotoGrid(); 
+                    }
+                };
+                grid.appendChild(img);
+            });
+        }
+
+        function toggleSpeech() {
+            if (!recognition) { showToast('Browser unterstützt keine Spracherkennung (Chrome/Edge empfohlen)'); return; }
+            const btn = document.getElementById('btn-speech');
+            if (btn.classList.contains('recording')) {
+                recognition.stop();
+            } else {
+                try {
+                    recognition.start();
+                    btn.classList.add('recording');
+                    btn.textContent = '⏹️ Spracheingabe stoppen';
+                    showToast('Spracheingabe aktiv...');
+                } catch (e) {
+                    showToast('Spracherkennung konnte nicht gestartet werden');
+                }
+            }
+        }
+
+        async function saveInspection() {
+            if (photos.length === 0) { showToast('Bitte mindestens ein Foto aufnehmen'); return; }
+            
+            const mangel = document.getElementById('mangel-text').value.trim();
+            const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+            const folderName = currentBauwerk + '_' + timestamp;
+            
+            const zip = new JSZip();
+            const folder = zip.folder(folderName);
+            
+            photos.forEach((photo, idx) => {
+                const ext = photo.type.split('/')[1] || 'jpg';
+                folder.file(`foto_${String(idx + 1).padStart(2, '0')}.${ext}`, photo.data, { base64: true });
+            });
+            
+            const textContent = `Bauwerk: ${currentBauwerk}\nDatum: ${new Date().toLocaleString('de-DE')}\nFotos: ${photos.length}\n\nMängel / Bemerkungen:\n${mangel || '-'}\n`;
+            folder.file('mangel.txt', textContent);
+            
+            try {
+                const blob = await zip.generateAsync({ type: 'blob' });
+                saveAs(blob, folderName + '.zip');
+                
+                document.getElementById('view-inspection').classList.add('hidden');
+                document.getElementById('view-success').classList.remove('hidden');
+            } catch (e) {
+                showToast('Fehler beim Erstellen der ZIP-Datei');
+                console.error(e);
+            }
+        }
+
+        function resetApp() {
+            stopScan();
+            currentBauwerk = '';
+            photos = [];
+            document.getElementById('mangel-text').value = '';
+            document.getElementById('manual-bauwerk').value = '';
+            document.getElementById('photo-grid').innerHTML = '';
+            document.getElementById('photo-count').textContent = '(0)';
+            document.getElementById('view-inspection').classList.add('hidden');
+            document.getElementById('view-success').classList.add('hidden');
+            document.getElementById('view-scan').classList.remove('hidden');
+            
+            setTimeout(() => startScan(), 300);
+        }
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+
+        window.onload = () => {
+            const params = new URLSearchParams(window.location.search);
+            const bauwerkFromUrl = params.get('bauwerk');
+            if (bauwerkFromUrl) {
+                openInspection(bauwerkFromUrl);
+            } else {
+                startScan();
+            }
+        };
+    </script>
+</body>
+</html>
